@@ -21,7 +21,7 @@ library(here)
 library(tidyverse)
 library(modelsummary)
 library(haven)
-
+here()
 df1 <- read.csv(here("data/countypres_2000-2020.csv")) ## Predictor data
 # df2 <- read.csv(here("data/seda_cov_county_long_5.0_updated_20240418.csv")) # Don't want!!
 df3 <- read.csv(here("data/seda_cov_county_pool_5.0.csv")) ## covariates
