@@ -1,0 +1,727 @@
+---
+title: 'The Impact of Political Ideology on Academic Outcomes: A Nationwide Analysis
+  of Conservative vs. Liberal States and Towns'
+subtitle: 'Adding Random Slopes to Model'
+author: "Brittany Spinner"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+    toc_float: true 
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(here)
+library(tidyverse)
+library(modelsummary)
+library(haven)
+
+df1 <- read.csv(here("data/countypres_2000-2020.csv")) ## Predictor data
+# df2 <- read.csv(here("data/seda_cov_county_long_5.0_updated_20240418.csv")) # Don't want!!
+df3 <- read.csv(here("data/seda_cov_county_pool_5.0.csv")) ## covariates
+
+### Continuous data 
+
+df4 <- read.csv(here("data/seda_county_pool_cs_5.0.csv")) ## cohort specific cs, not good for regression
+
+
+
+```
+
+```{r}
+######## Data prep and cleaning 
+# str(df2)
+
+outcome_var <- df4 %>% # outcome variable cs_mn_avg_ol w/ weighted est. cs_mn_avg_ol_se
+  filter(subgroup == 'all')
+
+
+## outcome data ready and complete 
+outcome_var <- outcome_var %>% 
+  select(sedacounty, sedacountyname, fips, cs_mn_avg_ol, cs_mn_avg_ol_se)
+
+# unique(df3$urbanicity)
+# summary(df3$urbanicity)
+# as.factor(df3$urbanicity)
+# unique(df3$urbanicity)
+# 
+#### Rural has the most counties, use as reference level
+df3$urbanicity <- as.factor(df3$urbanicity)
+df3$urbanicity <- relevel(df3$urbanicity, ref = "Rural")
+
+table(df3$urbanicity)
+
+##### Order Rural City Suburb Town
+cont_cov <- df3 %>%   # w/ totalenrl
+  select(sedacounty, sedacountyname, stateabb, urbanicity, totenrl, perecd, sesavgall, lninc50avgall, baplusavgall, povertyavgall, snapavgall, unempavgall, single_momavgall)
+# 
+# range(df1$year)
+predict_var <- df1 %>% 
+  filter(year >= 2008 & year <= 2019)
+
+predict_var <- predict_var %>% 
+  pivot_wider(
+    id_cols = c(state, state_po, county_name, county_fips, year, totalvotes),
+    names_from = party,
+    values_from = candidatevotes,
+    values_fill = list(candidatevotes = 0),
+    names_prefix = "votes_"
+  )
+
+predict_var <- predict_var %>% 
+  mutate(perc_democrat = ((votes_DEMOCRAT/totalvotes)*100),
+    perc_republican = ((votes_REPUBLICAN/totalvotes)*100),
+    perc_other = ((votes_OTHER/totalvotes)*100))
+
+predict_var <- predict_var %>% 
+  drop_na()
+
+# mean(predict_var$perc_other)
+# range(predict_var$perc_other)
+# str(predict_var)
+# summary(predict_var)
+
+predict_var <- predict_var %>% 
+  mutate(perc_non_republican = (perc_democrat + perc_other))
+
+predict_var <- predict_var %>% 
+  select( -votes_DEMOCRAT, -votes_REPUBLICAN, -votes_OTHER, -perc_democrat, -perc_other)
+## predict_var is clean and good to go
+
+
+##### Code only provides one observation of county so can't do random effects for county then 
+library(dplyr)
+
+predictor_var_avg <- predict_var %>%
+  group_by(county_fips, county_name, state, state_po) %>%
+  summarise(
+    avg_perc_republican = mean(perc_republican, na.rm = TRUE),
+    avg_perc_non_republican = mean(perc_non_republican, na.rm = TRUE),
+    total_votes_sum = sum(totalvotes, na.rm = TRUE),  # Optional: total votes across years
+    .groups = "drop"
+  )
+
+
+```
+
+
+```{r}
+####### Join Datasets 
+
+combined_base <- cont_cov %>%
+  left_join(outcome_var, by = c("sedacounty", "sedacountyname"))
+
+final_joined_df <- combined_base %>%
+  left_join(predictor_var_avg, by = c("sedacounty" = "county_fips"))
+str(final_joined_df)
+
+final_joined_df <- final_joined_df %>% 
+  select(-sedacounty,-fips, -county_name, -stateabb, -state_po)
+# summary(final_joined_df)
+final_joined_df <- final_joined_df %>%
+  drop_na()
+# final_joined_df <- final_joined_df %>% filter(stateabb != "DC")
+
+final_joined_df$sedacountyname <- as.factor(final_joined_df$sedacountyname)
+final_joined_df$stateabb <- as.factor(final_joined_df$state)
+
+```
+
+
+
+
+```{r}
+########collinearity
+
+
+###
+datasummary_correlation(final_joined_df,
+                        fmt=3) 
+
+#### ses highly correlated with povertyavgall and snapavg all and unemployment but none are highly correlated with predictor
+
+#### prop single mom is the most highly corr with predict 
+
+
+
+```
+
+How is cs_mn_all different from GCS scores?
+	•	The CS (cohort scale) scores are standardized relative to their cohort (grade and year), not transformed into a vertical scale.
+	•	That means a cs_mn_all score of 0.245 means that county’s average student scored 0.245 standard deviations above the national average for that subject/grade/year.
+	•	In other words, CS scores are z-score-like measures — they tell  a how far above or below the national mean the county’s average performance was.
+
+CS (Cohort Scale)
+Score relative to national average for that grade and year (like a z-score)
+1 unit = 1 SD above or below the national mean for that grade-year cohort
+GCS (Grade Cohort Scale)
+Standardized on a vertical scale; interpretable as a difference in grade-level achievement
+1 unit = approximately one academic grade level difference
+
+cs_mn_avg_ol
+Overall pooled mean on the cohort scale (standard deviation units): If using the cohort scale
+
+cs_mn_se_ol
+Standard error for that overall pooled mean: For weighting or reliability checks
+
+	_ol = “overall” pooled measure (often referred to in SEDA documentation as pooled estimates across years and grades for a given county/subject). single best estimate of the county’s overall achievement level.
+
+## Abstract 
+
+## Introduction
+
+1. What  we’re trying to do:
+	•	 have county-level outcome estimates (cs_mn_all) with known standard errors (cs_mn_se_all), which vary in reliability.
+	•	 also have a hierarchical structure (counties nested in states) and are interested in modeling political ideology, funding, and contextual factors.
+	•	ideally like to weight counties by the precision of those outcomes (inverse SE²).
+	
+
+## Data and Sample 
+
+**SEDA Data**
+
+SEDA Data, specifically The Education Opportunity Project at STandford University 5.0-- was used to analyze academic achievment across states and counties. This dataset was preferred over SEDA's most recent release of their 2019-2024 data, Education Recovery Project, because the latest release of SEDA data didn't include county-level information for schools. County-level information is needed to join political ideology data from the MIT... data by county level to...
+
+
+
+
+## MEthods and Procedures
+
+Multilevel approach:
+	•	  outcome variable (cs_mn_all) is measured at the county level, but counties are nested within states, and state-level policy or broader ideological contexts likely influence outcomes as well.
+	•	Political ideology and funding may vary both between states and within states across counties.
+	•	By including both county and state random effects,  a account for:
+	•	Unobserved variation in outcomes that is unique to each county.
+	•	Broader structural variation between states (e.g., differing state education policies, funding formulas, legislative environments).
+	•	This helps avoid underestimating standard errors and ensures correct inference.
+
+	•	Represents hierarchical (nested) random effects, where:
+	•	Counties are assumed to be nested within states.
+	•	The model estimates:
+	•	A random intercept and slope at the state level.
+	•	And, within each state, a random intercept and slope for each county (accounting for the county-specific deviations from that state’s average effect).
+	•	Conceptually:
+	•	The model understands the structure as:
+State → County (inside each state)
+	•	This is appropriate when each county belongs only to one state, and there is a clear hierarchical relationship.
+ Since counties are clearly nested within states, the more parsimonious and statistically appropriate formulation is: to account for the nesting of counties within states in teh hierarchical structure with random effects. (1 + political_leaning | state/county) and not to analyze them as cross-classified random effects (1 + political_leaning | state) + (1 + political_leaning | county), where the county random effects would not be nested under states, but, instead of estimated independently. 
+ 
+ 
+✅ Result:
+	•	Random intercepts and slopes for states, and counties that are grouped within states.
+	•	The county-level random effects “borrow strength” from their parent state’s estimates.
+
+variables 
+outcome variable:
+
+ Outcome Variable: cs_mn_avg_ol
+| cs_mn_avg_ol   | The overall mean achievement for that county (on the cohort scale), averaged across grades and pooled over the years. |
+| cs_mn_se_ol    | The standard error associated with that overall mean estimate.             |
+	•	In year-specific SEDA files, cs_mn_all typically refers to the mean for all students in a given county, subject, year, and grade group.
+	•	In the pooled dataset, cs_mn_avg_ol aggregates or smooths across grades and years to give  a a single best estimate of the county’s overall achievement level.
+
+	•	_ol = “overall” pooled measure (often referred to in SEDA documentation as pooled estimates across years and grades for a given county/subject).
+	•	This makes it a stable measure that is less noisy than single-year estimates and ideal for cross-sectional modeling.
+
+Predictor:
+political ideology
+SEDA data covers the years 2008–2018, it’s important to align   political ideology data to this same timeframe to ensure temporal consistency in   analysis.
+
+filtered for years 2008-2019
+Use political ideology data from 2008 to 2018: This alignment ensures that both   outcome (educational achievement) and predictor (political ideology) variables reflect the same period, providing a more accurate analysis of their relationship.
+
+Why align the timeframes?
+	•	Temporal Consistency: Using data from the same years ensures that   analysis accurately reflects the relationship between political ideology and educational outcomes during that specific period.
+	•	Policy Relevance: Political ideologies can shift over time. Focusing on the 2008–2018 period ensures that the political data accurately represents the environment influencing educational policies during those years.
+
+While including data from 2000 to 2020 might seem comprehensive, it introduces periods outside SEDA data range, potentially diluting the relevance of the political ideology measure concerning educational outcomes.
+
+
+Steps to align data:
+	1.	Filter political ideology data: Extract data from the MIT Election Data Science Lab for the years 2008, 2012, and 2016 (presidential election years within timeframe).
+	2.	Calculate average political leaning: Compute the average political ideology for each county across these election years to obtain a representative measure for the 2008–2018 period.
+	3.	Merge with SEDA data: Combine this averaged political ideology data with   SEDA dataset using the appropriate county identifiers.
+
+
+	Use a multi-year average or weighted summary measure of political ideology (e.g., average county-level Republican vote share) from 2000–2020 to match the pooled SEDA outcome.
+
+Covariates (fixed effects):
+school level factors, state level factors, student level factors
+
+not controlling for race: controlling for race might "adjust away" part of the effect you're trying to capture.
+
+
+Urbanicity (fixed effect)
+The character of the school's immediate environment (rural, town, suburb, urban). This captures population density, infrastructure, accessibility, and educational context at a smaller and more conceptual scale than county boundaries.
+
+Random effects:
+
+County (random effects)
+Unobserved, area-specific variation in outcomes (policy, administration, resources, demographics) at the county level. Itâ€™s a geographic and political boundary.
+
+State (random effects)
+Higher-level policy, legislative environment, state funding structures.
+
+
+
+Analysis:
+
+In this analysis, our data offered known standard errors for our outcome variable cs_mn_se_all, which varied in reliability. Wanting to account for this variability in the outcome and provide stronger estimates, this study utilizes a Bayesian multilevel modeling (MLM) approach (with brms) to handle obsreation-level weights as opposed to a frequentist multilevel model (using lme4 in R). Accounting for standard errors using the Bayesian MLM approach is a statistically more rigorous approach, providing more advanced and precise estimation of our outcome (i.e., More robust and interpretable output (posterior credible intervals instead of confidence intervals--brms will give  a more accurate inference and account for varying reliability across counties.). 
+
+This study uses data from SEDA which has an aggregated outcome variable with known measurement error, and Bayesian models can incorporate this uncertainty either via weights or via a measurement error model.
+	•	brms also lets  a easily extend the model to include:
+	•	Non-linear relationships
+	•	Interaction terms
+	•	Varying slopes
+	•	Hierarchical structures, and uncertainty weighting, all within one coherent framework.
+
+
+
+
+ 
+```{r}
+####### Null model MLM
+library(lme4)
+library(brms)
+# 
+null_model <- lmer(
+  cs_mn_avg_ol ~ 1 + (1 | state),
+  data = final_joined_df)
+summary(null_model)
+
+
+final_joined_df <- final_joined_df %>%
+  mutate(weight_se_achiev = 1 / (cs_mn_avg_ol_se^2))
+
+final_joined_df <- final_joined_df %>%
+  filter(is.finite(weight_se_achiev))
+
+
+# ####### Null model Bayesian 
+# null_model_bays <- brm(
+#   cs_mn_avg_ol ~ 1 + (1 | stateabb),
+#   data = final_joined_df,
+#   family = gaussian(),
+#   chains = 3,
+#   iter = 1000,
+#   cores = 4,
+#   control = list(adapt_delta = 0.99)
+# )
+
+# summary(final_joined_df$weight_se_achiev)
+# sum(is.na(final_joined_df$weight_se_achiev))
+
+
+
+```
+
+
+
+	State-level intercept variance
+0.02742
+0.1656
+There is meaningful variation in average county-level academic achievement across states. The standard deviation of 0.1656 indicates how much state-level averages vary from the grand mean.
+
+
+Residual variance (within-state variation)
+0.03880
+0.1970
+Variation in county outcomes within states. The larger this is relative to state variance, the more variability occurs at the county level.
+
+Intraclass Correlation Coefficient (ICC):
+
+	The ICC tells us how much of the total variance in achievement is attributable to differences between states, as opposed to within states.
+
+Interpretation of ICC:
+
+	About 41.4% of the variation in county-level academic achievement is due to differences between states, and the remaining 58.6% is due to differences within states (between counties).-- this means that most of the variation is within states between counties.
+	
+In simple reporting language:
+
+The *null* model indicates that the average county-level academic achievement (on the cohort scale) is approximately -0.02. There is substantial variability across states (state-level variance = 0.0274), with approximately 41% of the total variance in county-level achievement attributable to differences between states. This suggests that state-level factors may play an important role in shaping educational outcomes.	
+
+```{r}
+###### ICC Calculations
+# Install if needed
+# install.packages("performance")
+library(performance)
+icc(null_model)
+# # null_model# # For lme4 models
+# icc(null_model_lme4)
+# 
+# # For brms models
+# icc(null_model_bays)  # if null_model is   fitted brms object
+# 
+# install.packages("report")
+# library(report)
+# 
+# report(null_model_lme4)
+# report(null_model_bays)
+
+
+#########
+# Extract ICC values
+# icc_vals <- icc(null_model_lme4)
+# 
+# # Extract parameter estimates
+# params <- parameters(null_model_lme4)
+# 
+# # Combine ICC values and model estimates into a custom summary or add ICC to notes:
+# modelsummary(list("Null Model (lme4)" = null_model_lme4), 
+#              statistic = "conf.int",
+#              gof_map = c("nobs", "logLik", "AIC", "BIC"),
+#              notes = paste("ICC State: ", round(icc_vals$ICC[1], 3),
+#                            "; ICC County: ", round(icc_vals$ICC[2], 3)))
+
+
+```
+
+
+
+```{r}
+##### scaling predictors
+final_joined_df_scale <- final_joined_df %>%
+  mutate(
+    totenrl_z = scale(totenrl)[, 1],
+    perecd_z = scale(perecd)[, 1],
+    sesavgall_z = scale(sesavgall)[, 1],
+    lninc50avgall_z = scale(lninc50avgall)[, 1],
+    baplusavgall_z = scale(baplusavgall)[, 1],
+    povertyavgall_z = scale(povertyavgall)[, 1],
+    snapavgall_z = scale(snapavgall)[, 1],
+    single_momavgall_z = scale(single_momavgall)[, 1],
+    avg_perc_republican_z = scale(avg_perc_republican)[, 1]
+  )
+
+# cs_mn_avg_ol | se(cs_mn_avg_ol_se, sigma = TRUE) ~ avg_perc_republican_z + (1 | stateabb)
+```
+
+
+```{r}
+
+###### lm regression no rand effects 
+model_biv <- lm(
+   cs_mn_avg_ol ~ avg_perc_republican_z,
+  data = final_joined_df_scale)
+
+model0_lm <- lm(
+   cs_mn_avg_ol ~ avg_perc_republican_z + totenrl_z + urbanicity + perecd_z + 
+  sesavgall_z + lninc50avgall_z + baplusavgall_z + povertyavgall_z + snapavgall_z + 
+  single_momavgall_z,
+  data = final_joined_df_scale)
+
+model1_lm <- lm(
+   cs_mn_avg_ol ~ avg_perc_republican_z + totenrl_z + urbanicity + perecd_z + 
+  sesavgall_z + lninc50avgall_z + baplusavgall_z + povertyavgall_z + snapavgall_z + 
+  single_momavgall_z + state,
+  data = final_joined_df_scale)
+
+# str(final_joined_df)
+
+###### lmer MLM Rand int only not bayesian w/out scale
+
+
+model2_lmer_randint <- lmer(
+  cs_mn_avg_ol ~ avg_perc_republican_z + totenrl_z + urbanicity + perecd_z + 
+  sesavgall_z + lninc50avgall_z + baplusavgall_z + povertyavgall_z + snapavgall_z + 
+  single_momavgall_z + (1 | state),
+  data = final_joined_df_scale
+)
+
+model3_lmer_slopes <- lmer(
+  cs_mn_avg_ol ~ avg_perc_republican_z + totenrl_z + urbanicity + perecd_z + 
+  sesavgall_z + lninc50avgall_z + baplusavgall_z + povertyavgall_z + snapavgall_z + 
+  single_momavgall_z + (1 + avg_perc_republican_z | state),
+  data = final_joined_df_scale
+)
+
+anova(model2_lmer_randint, model3_lmer_slopes)
+### Rand slopes is significant better fitting model
+
+```
+
+Results:
+	After controlling for socioeconomic factors, urbanicity, and other demographic variables, both state-level characteristics and political leaning remain significant predictors of county-level achievement outcomes. The relationship between political leaning and academic outcomes varies slightly by state but tends to be positive overall.
+	
+	On average, counties with higher Republican political leaning tend to have slightly higher academic achievement after adjusting for socioeconomic and demographic controls, although this effect varies modestly across states. Socioeconomic factors, such as economic disadvantage and parental education levels, show strong and predictable associations with achievement. Urban and suburban locations are associated with modestly higher academic outcomes compared to rural counties.
+
+Fixed effects:
+(Intercept) (-0.0473): When all predictors are at their mean (z = 0), the expected achievement score (cs_mn_avg_ol) is slightly below average by 0.047 SD units.
+avg_perc_republican_z (0.0328): A 1 SD increase in the percentage of Republican voters is associated with a 0.033 SD increase in average academic achievement, on average.
+
+Rand effects:
+State-level intercept variance (0.0062): States differ slightly in their average achievement baseline, beyond whatâ€™s explained by fixed effects.
+State-level slope variance for political leaning (0.00060): The effect of Republican leaning varies slightly across states, but the variation is modest.
+Interceptâ€“slope correlation (0.36): States with higher average achievement tend to have a slightly stronger positive relationship between Republican leaning and achievement outcomes.
+Residual variance (0.0114): There is still some unexplained county-level variance in achievement after accounting for all predictors and random state-level variation.
+
+
+```{r}
+
+# final_joined_df %>%
+#   group_by(stateabb) %>%
+#   summarise(n_counties = n_distinct(sedacountyname)) %>%
+#   arrange(desc(n_counties))
+
+
+# model4_bays_slopes_weights <- brm(
+#   cs_mn_avg_ol | se(cs_mn_avg_ol_se, sigma = TRUE) ~ 
+#     avg_perc_republican_z + totenrl_z + urbanicity + perecd_z + sesavgall_z +
+#     lninc50avgall_z + baplusavgall_z + povertyavgall_z + snapavgall_z + single_momavgall_z +
+#     (1 | state),
+#   data = final_joined_df_scale,
+#   family = gaussian(),
+#   prior = c(
+#     prior(normal(0, 2), class = "b"),
+#     prior(student_t(3, 0, 5), class = "Intercept"),
+#     prior(cauchy(0, 1), class = "sd")
+#   ),
+#   chains = 4,
+#   iter = 4000,
+#   control = list(adapt_delta = 0.995, max_treedepth = 15),
+#   cores = 4
+# )
+# 
+# summary(model4_bays_slopes_weights)
+
+library(performance)
+
+modelsummary(
+  list(
+    "Null Model" = null_model,
+    "Bivariate Model" = model_biv,
+    "OLS Model Fixed Effects" = model0_lm,
+    "OLS Model Fixed Effects W/ States" = model1_lm, 
+    "LMM Random Intercepts" = model2_lmer_randint, 
+    "LMM Random Slopes" = model3_lmer_slopes 
+    # "Bayesian Random Slopes" = model4_bays_slopes_weights
+  ),
+  stars = TRUE,
+  fmt = 3,
+  gof_omit = "Adj.|Log|RMSE|Std.Err",
+  coef_omit = "state",
+ metrics = c("R2", "ICC", "RMSE"))
+ # output = here::here("tables/results_table.docx"))
+
+library(CompQuadForm)
+
+# test_lrt( model2_lmer_randint, model3_lmer_slopes)
+
+
+
+
+```
+
+
+
+
+**Full final model with `(1 + political_leaning | state/county)`**:  
+- acknowledging that political ideology's effect differs across geographic hierarchies.
+- This lets  a capture local policy differences and heterogeneous political impacts.
+
+```{r}
+###### Adding 'priors' for comparison model to improve convergence, stability, and regularized estimates (preventing extreme values)
+
+################ MLM model Rand Int and Slopes, with set priors 
+# library(brms)
+# 
+# model4_MLM_slopes_priors <- brm(
+#   cs_mn_all ~ political_leaning + funding_per_pupil + urban_rural + 
+#   (1 + political_leaning | state/county),
+#   data = df1,
+#   family = gaussian(),
+#   weights = weight_se_achiev,
+#   prior = c(
+#     prior(normal(0, 5), class = "b"),
+#     prior(student_t(3, 0, 10), class = "Intercept"),
+#     prior(cauchy(0, 2), class = "sd")
+#   ),
+#   chains = 4,
+#   iter = 4000,
+#   cores = 4,
+#   control = list(adapt_delta = 0.95)
+# )
+
+
+### ✅ Using ANOVA as part of model building:
+# - In the **LM models**,  a can use ANOVA (or likelihood-ratio tests) to compare nested models:
+# - Example: 
+
+# `anova(model1_lm, model2_lm)`
+
+# - In the **Bayesian setting**, use model comparison via:
+
+# loo(model1_brm, model2_brm)
+```
+
+
+## Results
+
+visualization 
+```{r}
+
+# Get the variance-covariance matrix from the postVar attribute
+postVar <- attr(state_effects, "postVar")
+
+# Extract the standard errors for the slope estimates (the second row/column diagonal)
+slope_se <- sqrt(sapply(1:dim(postVar)[3], function(i) postVar[2, 2, i]))
+
+# Build the dataframe with slope estimates and 95% confidence intervals
+random_slopes <- data.frame(
+  state = rownames(state_effects),
+  slope_estimate = state_effects$avg_perc_republican_z,
+  lower_95 = state_effects$avg_perc_republican_z - 1.96 * slope_se,
+  upper_95 = state_effects$avg_perc_republican_z + 1.96 * slope_se
+)
+
+# Check the result
+head(random_slopes)
+
+library(ggplot2)
+
+
+
+ggplot(random_slopes, aes(x = reorder(state, slope_estimate), y = slope_estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = lower_95, ymax = upper_95), width = 0.2) +
+  coord_flip() +
+  labs(
+    x = "State",
+    y = "Estimated slope for Avg. Republican Leaning (Scaled %)"
+  ) +
+  theme_minimal()
+
+# ggsave(here::here("figures/resuls_plot.png"))
+```
+
+```{r}
+final_joined_df_renamed <- final_joined_df %>%
+  rename(
+    Urbanicity = urbanicity,
+    `Total Enrollment` = totenrl,
+    `Economically Disadvantaged Proportion` = perecd,
+    `Average SES Index` = sesavgall,
+    `Median Family Income (log)` = lninc50avgall,
+    `Proportion of Families with BA+ Degree` = baplusavgall,
+    `Poverty Rate` = povertyavgall,
+    `SNAP Participation Rate` = snapavgall,
+    `Unemployment Rate` = unempavgall,
+    `Single Mother Household Proportion` = single_momavgall,
+    `Academic Achievement (Standardized)` = cs_mn_avg_ol,
+    `SE of Academic Achievement` = cs_mn_avg_ol_se,
+    `Average Republican Vote Share (%)` = avg_perc_republican,
+    `Average Non-Republican Vote Share (%)` = avg_perc_non_republican,
+    `Total Presidential Votes (2008–2016)` = total_votes_sum,
+    `Inverse Variance Weight (Achievement SE)` = weight_se_achiev
+  )
+
+datasummary_skim(
+  final_joined_df_renamed, 
+  type = "all",
+  fmt = 2,
+  fun_numeric = list(Mean = Mean, Median = Median, SD = SD, Min = Min, Max = Max), 
+  output = here::here("tables/desc_stats.docx")
+)
+```
+
+
+
+
+
+1. Posterior predictive checks (PPC):
+	•	This is the Bayesian equivalent of checking residuals and model fit.
+```{r}
+# pp_check(model_state_county)
+```
+
+
+2. Residual checks:
+	•	Extract residuals and plot them:
+```{r}
+res <- residuals(model_biv, summary = FALSE)
+fitted_values <- fitted(model_biv, summary = FALSE)[,1]
+plot(fitted_values, res,
+     xlab = "Fitted Values", ylab = "Residuals", main = "Residuals vs Fitted")
+abline(h = 0, col = "red")
+```
+
+	•	Look for:
+	•	No strong pattern.
+	•	No funneling (heteroscedasticity).
+	•	No strong curvature (non-linearity).
+
+
+3. Check normality of residuals:
+```{r}
+qqnorm(res)
+qqline(res)
+```
+	•	Residuals should roughly follow a straight line.
+
+4. Check random effects variance:
+```{r}
+summary(model3_lmer_slopes)
+```
+
+	•	Ensure:
+	•	Random effect standard deviations (SDs) are reasonable, not near zero (unless expected), and not absurdly large.
+	•	The random slopes’ standard deviations are interpretable and add value.
+	
+5. Check for divergent transitions and MCMC diagnostics:
+```{r}
+library(ggfortify)
+# # install.packages("ggfortify")
+# p <- autoplot(model_biv)
+# ggsave(here::here("figures/model_biv_diagnostics.png"), plot = p)
+
+plots <- plot(model_biv)
+for (i in seq_along(plots)) {
+  ggsave(
+    filename = here::here("figures", paste0("model_biv_diagnostic_", i, ".png")),
+    plot = plots[[i]],
+    width = 7,
+    height = 7
+  )
+}
+
+
+```
+
+	•	Look for:
+	•	Rhat values close to 1 (convergence diagnostic).
+	•	No divergent transitions in the printout. If there are,  a might need to increase adapt_delta or rethink priors.
+	•	Adequate effective sample sizes for all parameters.
+
+6. Check linearity visually:
+```{r}
+# conditional_effects(model_state_county, effects = "political_leaning")
+
+```
+
+	•	If the plots look like smooth, monotonic relationships with consistent uncertainty bands, linearity is likely a good approximation.
+
+7. Check for influential observations:
+```{r}
+# loo_res <- loo(model_state_county)
+# plot(loo_res)
+```
+
+	•	This plots Pareto-k diagnostics.
+	•	Values below 0.5 are ideal,
+	•	0.5–0.7 is okay,
+
+
+
+
+## Conclusion 
+
+## References 
+
+
+
